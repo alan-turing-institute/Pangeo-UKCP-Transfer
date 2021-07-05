@@ -1,0 +1,43 @@
+FROM ubuntu:18.04
+
+### get pip git etc
+
+RUN apt-get update; apt-get install -y python3.7
+RUN apt-get update; apt-get install -y python3.7-dev
+RUN apt-get update; apt-get install -y python3-pip
+
+RUN apt-get update; apt-get install -y locales
+RUN apt-get update; apt-get install -y libcairo2-dev
+RUN apt-get update; apt-get install -y git
+RUN apt-get update; apt-get install -y wget
+
+# Set the locale
+RUN sed -i -e 's/# en_GB.UTF-8 UTF-8/en_GB.UTF-8 UTF-8/' /etc/locale.gen && \
+    locale-gen
+ENV LANG en_GB.UTF-8
+ENV LANGUAGE en_GB:en
+ENV LC_ALL en_GB.UTF-8
+
+RUN git clone https://github.com/pangeo-forge/pangeo-forge-recipes.git; cd pangeo-forge-recipes; python3.7 -m pip install .; cd -;
+
+RUN python3.7 -m pip install xarray
+RUN python3.7 -m pip install zarr
+RUN python3.7 -m pip install fsspec
+RUN python3.7 -m pip install adlfs==v0.7.7
+RUN python3.7 -m pip install rechunker
+RUN python3.7 -m pip install prefect
+RUN python3.7 -m pip install dask
+RUN python3.7 -m pip install matplotlib
+RUN python3.7 -m pip install netCDF4
+RUN python3.7 -m pip install h5netcdf
+
+RUN mkdir /tmp/certs
+COPY creds.pem /tmp/certs/creds.pem
+
+RUN mkdir /transfer
+COPY ukcp_transfer.py /transfer/ukcp_transfer.py
+
+#RUN sed -i ~/.profile -e 's/mesg n || true/tty -s \&\& mesg n/g'
+
+WORKDIR /transfer
+#ENTRYPOINT ["/bin/bash", "-l", "-c"]
