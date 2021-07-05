@@ -18,7 +18,7 @@ from adlfs import AzureBlobFileSystem
 import matplotlib.pyplot as plt
 import logging
 
-from ukcp_utils import download_file
+from ukcp_ceda_utils import download_file
 from azure_config import config
 
 logging.basicConfig(filename="transfer_{}".format(time.strftime("%Y-%m-%d_%H-%M-%S")),
