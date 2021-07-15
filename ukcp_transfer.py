@@ -16,22 +16,27 @@ import fsspec
 from adlfs import AzureBlobFileSystem
 
 import matplotlib.pyplot as plt
-import logging
 
-from ukcp_ceda_utils import download_file
 from azure_config import config
 
-logging.basicConfig(filename="transfer_{}".format(time.strftime("%Y-%m-%d_%H-%M-%S")),
-                            level=logging.WARNING,
-                            format='')
+import logging
+logging.basicConfig(filename="transfer_{}.log".format(time.strftime("%Y-%m-%d_%H-%M-%S")),
+                    level=logging.WARNING,
+                    format='')
 
 
 def fix_attrs(ds, fname=None):
+    if not 'time' in ds.dims:
+        # for ann-20y, time is not a dimension - add it to the dimensions so we can concatenate
+        varname = list(ds.variables)[0]
+        ds[varname] = ds[varname].expand_dims("time")
     orig_coords = list(ds.coords)
     if ds.resolution=="5km":
         ds = ds.set_coords(orig_coords+["time_bnds", "projection_y_coordinate_bnds","projection_x_coordinate_bnds"])
     elif ds.resolution == "2.2km":
         ds = ds.set_coords(orig_coords+["time_bnds", "grid_latitude_bnds","grid_longitude_bnds", "rotated_latitude_longitude"])
+    elif ds.resolution == "country" or ds.resolution=="region" or ds.resolution=="river":
+        ds = ds.set_coords(orig_coords+["time_bnds"])
     else:
         raise RuntimeError("Unknown grid size {}".format(grid_size))
     return ds
@@ -99,39 +104,6 @@ def get_date_range(grid_size, freq):
     return date_range
 
 
-def nc_to_zarr_direct(url_pattern, date_range, output_path, account_name, sas_token):
-    """
-    use this function to load xarray dataset directly and write to zarr,
-    not using the xarray_zarr pangeo-forge recipe.
-    Used when we don't need to concatenate along any dimension, e.g.
-    for the ann-20y, where we don't have a "time" dimension.
-    """
-    for date in date_range:
-        url = url_pattern.format(time=date)
-        with tempfile.TemporaryDirectory() as cache_dir:
-            tries = 0
-            downloaded_ok = False
-            while (not downloaded_ok) and tries < 4:
-                downloaded_ok = download_file(url, output_location=cache_dir)
-                tries += 1
-            if downloaded_ok:
-                logging.warning("NC_TO_ZARR_DIRECT - DOWNLOADED {}".format(url))
-            else:
-                logging.warning("NC_TO_ZARR_DIRECT - FAILED TO DOWNLOAD {}".format(url))
-                continue
-            filename = url.split("/")[-1]
-            ds = xr.open_dataset(os.path.join(cache_dir, filename))
-            ds = fix_attrs(ds)
-            # add the date to the output path
-            full_path = os.path.join(output_path, date)
-            store = fsspec.get_mapper("abfs://{}".format(full_path),
-                                      account_name=account_name,
-                                      sas_token=sas_token)
-            ds.to_zarr(store, mode="w", consolidated=True)
-            logging.info("NC_TO_ZARR_DIRECT - UPLOADED {}".format(full_path))
-
-    return True
-
 def transfer_dataset(grid_size,
                      freq,
                      variable,
@@ -142,9 +114,8 @@ def transfer_dataset(grid_size,
 
     fs_local = LocalFileSystem()
 
-
     account_name = config["ACCOUNT_NAME"]
-    sas_token= config["SAS_TOKEN"]
+    sas_token = config["SAS_TOKEN"]
 
     abfs = AzureBlobFileSystem(account_name=account_name,
                                sas_token=sas_token)
@@ -152,6 +123,7 @@ def transfer_dataset(grid_size,
     tag = "v20190725" if grid_size == "5km" else "v20190731"
 
     url_pattern = "http://dap.ceda.ac.uk/badc/ukcp18/data/land-cpm/uk/GRID_SIZE/rcp85/ENSEMBLE/VARIABLE/FREQ/TAG/VARIABLE_rcp85_land-cpm_uk_GRID_SIZE_ENSEMBLE_FREQ_{time}.nc"
+#    url_pattern = "testdata/VARIABLE_rcp85_land-cpm_uk_GRID_SIZE_ENSEMBLE_FREQ_{time}.nc"
     url_pattern = url_pattern.replace("GRID_SIZE", grid_size)
     url_pattern = url_pattern.replace("FREQ", freq)
     url_pattern = url_pattern.replace("TAG", tag)
@@ -171,28 +143,43 @@ def transfer_dataset(grid_size,
                 tag,
                 ensemble)
 
-    if freq == "ann-20y":
-        # don't use recipe - transfer files directly
-        return nc_to_zarr_direct(url_pattern,
-                                 date_range,
-                                 output_path,
-                                 account_name,
-                                 sas_token)
-
-    # otherwise, we do have a "time" dimension - use XarrayZarrRecipe
-
     def make_filename(time):
         return url_pattern.format(time=time)
 
-    time_steps_per_input = {"2.2km_day": 360,
-                            "5km_day": 3600,
-                            "5km_ann": 20}
+    def time_steps_per_input_and_chunks(grid_size, freq):
+        """
+        return a tuple (int, int) containing the number of
+        'time' values in each input file, and the number we want
+        in an output chunk.   These might be the same, unless the
+        input files are small, in which case we chunk them together
+        """
+        if freq == "ann-20y":
+            return (1, 3)
+        elif freq == "ann":
+            return (20, 60)
+        elif freq == "mon":
+            return (240, 720)
+        elif freq == "seas":
+            return (80, 240)
+        elif freq == "mon-20y":
+            return (12, 36)
+        elif freq == "seas-20y":
+            return (4, 12)
+        elif freq == "day":
+            if grid_size == "2.2km":
+                return (360, 360)
+            elif grid_size == "5km":
+                return (3600, 3600)
+        else:
+            print("unknown freq and/or grid_size {} {}".format(freq, grid_size))
+            return (None, None)
 
+    time_steps_per_input, chunk_size = time_steps_per_input_and_chunks(grid_size, freq)
     pattern = FilePattern(
         make_filename,
         ConcatDim(name="time",
                   keys=date_range,
-                  nitems_per_file=time_steps_per_input["{}_{}".format(grid_size,freq)]),
+                  nitems_per_file=time_steps_per_input),
     )
 
 
@@ -201,12 +188,26 @@ def transfer_dataset(grid_size,
     print("creating recipe...")
     if grid_size == "5km":
         target_chunks = {'ensemble_member': 1,
-                         'time': time_steps_per_input["{}_{}".format(grid_size,freq)],
+                         'time': chunk_size,
                          'projection_y_coordinate': 244, 'projection_x_coordinate': 180, 'bnds': 2}
     elif grid_size == "2.2km":
         target_chunks = {'ensemble_member': 1,
-                         'time': time_steps_per_input["{}_{}".format(grid_size,freq)],
+                         'time': chunk_size,
                          'grid_longitude': 484, 'grid_latitude': 606}
+    elif grid_size == "country":
+        target_chunks = {"ensemble_member": 1,
+                         "time": chunk_size,
+                         "region": 8, "bnds": 2}
+    elif grid_size == "region":
+        target_chunks = {"ensemble_member": 1,
+                         "time": chunk_size,
+                         "region": 16, "bnds": 2}
+    elif grid_size == "river":
+        target_chunks = {"ensemble_member": 1,
+                         "time": chunk_size,
+                         "region": 23, "bnds": 2}
+    else:
+        raise RuntimeError("Unknown grid_size {}".format(grid_size))
 
     ssl_ctx = ssl.create_default_context()
     ssl_ctx.load_cert_chain("/tmp/certs/creds.pem")
@@ -218,8 +219,6 @@ def transfer_dataset(grid_size,
     )
 
     print("creating target...")
-
-
 
     # ABFS target
     if target == "abfs":
@@ -241,9 +240,6 @@ def transfer_dataset(grid_size,
         task.max_retries=7
         task.retry_delay = timedelta(seconds=15)
     executor.execute_plan(plan)
-
-
-
 
 
 if __name__ == "__main__":
