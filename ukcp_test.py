@@ -15,14 +15,35 @@ import matplotlib.pyplot as plt
 from azure_config import config
 
 expected_shapes = {"5km_ann": (1, 60, 244, 180),
+                   "country_ann": (1,60,8),
+                   "region_ann": (1,60,16),
+                   "river_ann": (1,60,23),
                    "2.2km_day": (1,21600, 606, 484),
                    "5km_ann-20y": (3, 1, 244, 180),
                    "river_ann-20y": (3, 1, 23),
                    "country_ann-20y": (3, 1, 8),
                    "region_ann-20y": (3, 1, 16),
+                   "5km_seas-20y": (1,12,244,180),
                    "river_seas-20y": (1, 12, 23),
                    "country_seas-20y": (1, 12, 8),
                    "region_seas-20y": (1, 12, 16),
+                   "5km_mon-20y": (1,36,244,180),
+                   "country_mon-20y": (1,36,8),
+                   "region_mon-20y": (1,36,16),
+                   "river_mon-20y": (1,36,23),
+                   "river_seas": (1,240,23),
+                   "region_seas": (1,240,16),
+                   "country_seas": (1,240,8),
+                   "5km_seas": (1,240,244,180),
+                   "river_mon": (1,720,23),
+                   "region_mon": (1,720,16),
+                   "country_mon": (1,720,8),
+                   "5km_mon": (1,720,244,180),
+                   "river_day": (1,21600,23),
+                   "region_day": (1,21600,16),
+                   "country_day": (1,21600,8),
+                   "5km_day": (1,21600,244,180)
+
                    }
 
 
