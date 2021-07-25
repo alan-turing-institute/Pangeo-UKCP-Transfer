@@ -10,6 +10,7 @@ RUN apt-get update; apt-get install -y locales
 RUN apt-get update; apt-get install -y libcairo2-dev
 RUN apt-get update; apt-get install -y git
 RUN apt-get update; apt-get install -y wget
+RUN apt-get update; apt-get install -y libhdf5-serial-dev
 
 # Set the locale
 RUN sed -i -e 's/# en_GB.UTF-8 UTF-8/en_GB.UTF-8 UTF-8/' /etc/locale.gen && \
@@ -27,6 +28,7 @@ RUN python3.7 -m pip install adlfs==v0.7.7
 RUN python3.7 -m pip install rechunker
 RUN python3.7 -m pip install prefect
 RUN python3.7 -m pip install dask
+#RUN python3.7 -m pip install dask.distributed
 RUN python3.7 -m pip install matplotlib
 RUN python3.7 -m pip install netCDF4
 RUN python3.7 -m pip install h5netcdf
@@ -36,8 +38,6 @@ COPY creds.pem /tmp/certs/creds.pem
 
 RUN mkdir /transfer
 COPY ukcp_transfer.py /transfer/ukcp_transfer.py
-
-#RUN sed -i ~/.profile -e 's/mesg n || true/tty -s \&\& mesg n/g'
+COPY azure_config.py /transfer/azure_config.py
 
 WORKDIR /transfer
-#ENTRYPOINT ["/bin/bash", "-l", "-c"]
