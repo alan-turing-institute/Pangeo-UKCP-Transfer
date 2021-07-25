@@ -7,6 +7,8 @@ import ssl
 import argparse
 from datetime import timedelta
 import time
+import dask
+import distributed
 
 import tempfile
 from fsspec.implementations.local import LocalFileSystem
@@ -69,9 +71,18 @@ def calc_date_range(overall_start_date,
             start_year = end_year
             start_date = start_year+start_month+start_day
         elif increment == "1m":
-            end_year = start_year if start_month != "12" \
+            # go from 01 day to 30 of same month
+            end_date = "{}{}{}".format(start_year, start_month, end_day)
+            date_range.append("{}-{}".format(
+                start_date, end_date
+            ))
+            # get the next date
+            start_year = start_year if start_month != "12" \
                 else str(int(start_year)+1)
-            end_month = str((int(start_month)-1 + int(increment[:-1]) % 12)+1)
+            start_month = (int(start_month) % 12)+1
+            # pad with zero as necessary
+            start_month = f"{start_month:02}"
+            start_date = "{}{}{}".format(start_year, start_month, start_day)
         else:
             raise RuntimeError("Unknown increment {}".format(increment))
     return date_range
@@ -109,6 +120,7 @@ def transfer_dataset(grid_size,
                      variable,
                      ensemble,
                      container_name,
+                     source="ceda",
                      target="abfs",
                      test=False):
 
@@ -120,10 +132,16 @@ def transfer_dataset(grid_size,
     abfs = AzureBlobFileSystem(account_name=account_name,
                                sas_token=sas_token)
 
-    tag = "v20190725" if grid_size == "5km" else "v20190731"
+    tag = "v20190725" if grid_size == (grid_size == "5km" and not freq.endswith("hr")) \
+        else "v20190731"
 
-    url_pattern = "http://dap.ceda.ac.uk/badc/ukcp18/data/land-cpm/uk/GRID_SIZE/rcp85/ENSEMBLE/VARIABLE/FREQ/TAG/VARIABLE_rcp85_land-cpm_uk_GRID_SIZE_ENSEMBLE_FREQ_{time}.nc"
-#    url_pattern = "testdata/VARIABLE_rcp85_land-cpm_uk_GRID_SIZE_ENSEMBLE_FREQ_{time}.nc"
+    if source == "ceda":
+        url_pattern = "http://dap.ceda.ac.uk/badc/ukcp18/data/land-cpm/uk/GRID_SIZE/rcp85/ENSEMBLE/VARIABLE/FREQ/TAG/VARIABLE_rcp85_land-cpm_uk_GRID_SIZE_ENSEMBLE_FREQ_{time}.nc"
+    elif source == "azure":
+        url_pattern = "https://ukcpstagingtest.blob.core.windows.net/ukcp18test/ukcp18/land-cpm/uk/GRID_SIZE/rcp85/ENSEMBLE/VARIABLE/FREQ/TAG/VARIABLE_rcp85_land-cpm_uk_GRID_SIZE_ENSEMBLE_FREQ_{time}.nc"
+    else: # local filesystem
+        url_pattern = "testdata/VARIABLE_rcp85_land-cpm_uk_GRID_SIZE_ENSEMBLE_FREQ_{time}.nc"
+    # sub in the different parameters
     url_pattern = url_pattern.replace("GRID_SIZE", grid_size)
     url_pattern = url_pattern.replace("FREQ", freq)
     url_pattern = url_pattern.replace("TAG", tag)
@@ -170,6 +188,15 @@ def transfer_dataset(grid_size,
                 return (360, 360)
             elif grid_size == "5km":
                 return (3600, 3600)
+            else:
+                return (3600, 21600)
+        elif freq == "3hr":
+            if grid_size == "5km":
+                return (240, 960)
+            else:
+                return (240, 240)
+        elif freq == "1hr":
+            return (720, 720)
         else:
             print("unknown freq and/or grid_size {} {}".format(freq, grid_size))
             return (None, None)
@@ -232,6 +259,8 @@ def transfer_dataset(grid_size,
     recipe.target = target
     recipe.input_cache = cache_target
 
+#    dask_pipeline = recipe.to_dask()
+#    dask.compute(dask_pipeline)
     pipelines = recipe.to_pipelines()
     executor = PrefectPipelineExecutor()
     plan = executor.pipelines_to_plan(pipelines)
@@ -262,6 +291,8 @@ if __name__ == "__main__":
                         default="testzarr")
     parser.add_argument("--test", help="only run over first two input files",
                         action="store_true")
+    parser.add_argument("--source", help="where are the source files?",
+                        default="ceda", choices=["ceda","azure","local"])
     args = parser.parse_args()
 
     test = args.test if args.test else False
@@ -288,5 +319,6 @@ if __name__ == "__main__":
                 variable,
                 ensemble,
                 args.container,
+                source=args.source,
                 test=test
             )
